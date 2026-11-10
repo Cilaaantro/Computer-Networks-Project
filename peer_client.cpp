@@ -54,6 +54,75 @@ int main() {
   cout<< "connected to peer server" << endl;
 
   //close connection
+ 
+
+  //request message
+  string request = "GET test.txt\n";
+  size_t totalSent = 0;
+
+  //keep sending request until its fully sent
+  while (totalSent < request.size()) {
+    ssize_t bytesSent = send(
+      clientSocket,
+      request.data() + totalSent,
+      request.size() - totalSent,
+      MSG_NOSIGNAL
+    );
+    if (bytesSent <= 0) {
+      perror("send failed");
+      close(clientSocket);
+      return 1;
+    }
+
+    totalSent += bytesSent;
+  }
+  cout << "Requested test.txt" << endl;
+
+  //create file for download
+  ofstream outputFile("downloaded_test.txt", ios::binary);
+
+  if (!outputFile.is_open()) {
+    cerr << "Cannot create output file" << endl;
+    close(clientSocket);
+    return 1;
+  }
+
+  char buffer[1024];
+  ssize_t bytesReceived;
+  size_t totalReceieved;
+
+  // receive the file
+  while ((bytesReceived = recv (
+    clientSocket,
+    buffer,
+    sizeof(buffer),
+  0))>0){
+    //write received data to file
+    outputFile.write(buffer, bytesReceived);
+    if (!outputFile) {
+      cerr << "Error writing file" << endl;
+      close(clientSocket);
+      return 1;
+    }
+    totalReceieved += bytesReceived;
+    cout<< ""<< totalReceieved << "bytes received" <<endl;
+
+  }
+  if (bytesReceived < 0) {
+    perror("recv failed");
+    close(clientSocket);
+    return 1;
+  }
+
+  outputFile.close();
+
+  if (!outputFile) {
+    cerr << "Error closing output file" << endl;
+    close(clientSocket);
+    return 1;
+  }
+
+  cout << "Download finished!" << endl;
   close(clientSocket);
 
   return 0;
