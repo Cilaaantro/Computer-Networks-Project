@@ -1,23 +1,29 @@
 #include <iostream>
+#include <fstream>
+#include <string>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <cstring>
 
 
 using namespace std;
 
 
-int main(int argc, char* argv[]) {
+int main() {
 
-  if (argc != 3){
-    cout<< "invalid ammount of arguments"<<endl;
+  ifstream config("peerDownloadConfig.cfg");
+
+
+  string serverIP;
+  int port;
+
+  if (!(config >> serverIP >> port) ||
+    port < 1 || port > 65535) {
+    cerr << "invalid config";
     return 1;
   }
 
-  const char* serverIP = argv[1];
-  int port = stoi(argv[2]);
-
+  //create socket endpoint
   int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
   if (clientSocket < 0) {
@@ -25,17 +31,19 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  // configure address
   sockaddr_in serverAddress{};
   serverAddress.sin_family = AF_INET;
   serverAddress.sin_port = htons(port);
 
-  if (inet_pton(AF_INET, serverIP,
+  if (inet_pton(AF_INET, serverIP.c_str(),
       &serverAddress.sin_addr)!=1){
     cout << "invalid ip" << endl;
     close(clientSocket);
     return 1; 
   }
 
+  //connect to server
   if(connect(clientSocket, (sockaddr*)&serverAddress,
     sizeof(serverAddress))<0){
     perror("connection failed");
@@ -45,6 +53,7 @@ int main(int argc, char* argv[]) {
 
   cout<< "connected to peer server" << endl;
 
+  //close connection
   close(clientSocket);
 
   return 0;
