@@ -9,6 +9,8 @@
 #include <vector>
 #include <atomic>
 #include <functional>
+#include <fcntl.h>
+#include <cerrno>
 
 
 using namespace std;
@@ -31,8 +33,32 @@ bool recvLine(int socketFD, string& line){
   }
   return false;
 }
+//custome write function to write into one file all at once
+bool writeChunk(int outputFD, const char* buffer, size_t length, size_t offset) {
+  size_t totalWritten =0 ;
 
-bool downloadChunk(const string& serverIP, int port, size_t offset, size_t length, size_t chunkNumber) {
+  while(totalWritten<length){
+    //allows chunk to be written at specific positions
+    ssize_t bytesWritten = pwrite(
+      outputFD,
+      buffer+ totalWritten,
+      length-totalWritten,
+      offset+totalWritten
+    );
+    if(bytesWritten<0 && errno==EINTR){
+      continue;
+    }
+
+    if(bytesWritten<=0){
+      perror("pwrite failed");
+      return false;
+
+    }
+    totalWritten +=bytesWritten;
+  }
+  return true;
+}
+bool downloadChunk(const string& serverIP, int port, size_t offset, size_t length, size_t chunkNumber, int outputFD) {
   //create socket endpoint
   int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -122,22 +148,11 @@ bool downloadChunk(const string& serverIP, int port, size_t offset, size_t lengt
     totalReceived += bytesReceived;
   }
 
-  string outputName = "chunk_" + to_string(chunkNumber) + ".bin";
-  ofstream outputFile(outputName, ios::binary);
-
-  if (!outputFile.is_open()) {
-    cerr << "chunk file failed to create" << endl;
+  if (!writeChunk(outputFD, buffer, totalReceived, offset)) {
     close(clientSocket);
     return false;
   }
-  outputFile.write(buffer, totalReceived);
-  outputFile.close();
 
-  if (!outputFile) {
-    cerr << "failed to save chunk" << endl;
-    close(clientSocket);
-    return false;
-  }
 
   cout << "Downloaded chunk: "
     << chunkNumber
@@ -148,7 +163,7 @@ bool downloadChunk(const string& serverIP, int port, size_t offset, size_t lengt
 
 }
 //worker function for downloading chunks
-void downloadWorker(int threadID, int threadCount, const string& serverIP, int port, size_t fileSize, size_t chunkSize, atomic<bool>& failed) {
+void downloadWorker(int threadID, int threadCount, const string& serverIP, int port, size_t fileSize, size_t chunkSize, atomic<bool>& failed,int outputFD) {
 
   size_t totalChunks = (fileSize + chunkSize -1)/chunkSize;
 
@@ -156,12 +171,14 @@ void downloadWorker(int threadID, int threadCount, const string& serverIP, int p
     size_t offset = chunkNumber * chunkSize;
     size_t length =min(chunkSize, fileSize-offset);
     cout << "Thread " << threadID << " downloading chunk " << chunkNumber << endl;
-    if (!downloadChunk(serverIP, port, offset, length, chunkNumber)) {
+    if (!downloadChunk(serverIP, port, offset, length, chunkNumber,outputFD)) {
       failed = true;
       return;
     }
   }
 }
+
+
 int main() {
 
   ifstream config("peerDownloadConfig.cfg");
@@ -181,6 +198,19 @@ int main() {
 
   const int threadCount=3;
 
+  int outputFD = open("downloaded_test.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+  if (outputFD < 0) {
+    perror("failed to create output file");
+    return 1;
+  }
+
+  if (ftruncate(outputFD, fileSize) == -1) {
+    perror("failed to resize output file");
+    close(outputFD);
+    return 1;
+  }
+
   atomic<bool> failed(false);
 
   vector<thread>workers;
@@ -188,7 +218,7 @@ int main() {
   //create thread for each worker
   for(int i =0; i<threadCount;i++){
     workers.emplace_back(downloadWorker, i, threadCount,
-    cref(serverIP), port, fileSize,chunkSize,ref(failed));
+    cref(serverIP), port, fileSize,chunkSize,ref(failed), outputFD);
 
   }
 
@@ -196,12 +226,18 @@ int main() {
     worker.join();
   }
 
+  if (close(outputFD) == -1) {
+    perror("failed to close output file");
+    return 1;
+  }
+
   if(failed){
     cerr<< "one or more chunks failed"<<endl;
     return 1;
   }
 
-  cout << "all chunks downloaded" << endl;
+  
+  cout << "download and merging complete" << endl;
 
 
   return 0;
