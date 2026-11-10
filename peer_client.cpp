@@ -5,9 +5,15 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <algorithm>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <functional>
 
 
 using namespace std;
+
+
 
 bool recvLine(int socketFD, string& line){
   char ch;
@@ -24,6 +30,137 @@ bool recvLine(int socketFD, string& line){
     line +=ch;
   }
   return false;
+}
+
+bool downloadChunk(const string& serverIP, int port, size_t offset, size_t length, size_t chunkNumber) {
+  //create socket endpoint
+  int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+  if (clientSocket < 0) {
+    perror("socket failed");
+    return false;
+  }
+
+  // configure address
+  sockaddr_in serverAddress{};
+  serverAddress.sin_family = AF_INET;
+  serverAddress.sin_port = htons(port);
+
+  if (inet_pton(AF_INET, serverIP.c_str(),
+      &serverAddress.sin_addr)!=1){
+    cout << "invalid ip" << endl;
+    close(clientSocket);
+    return false; 
+  }
+
+  //connect to server
+  if(connect(clientSocket, (sockaddr*)&serverAddress,
+    sizeof(serverAddress))<0){
+    perror("connection failed");
+    close(clientSocket);
+    return false;
+  }
+
+  cout<< "connected to peer server" << endl;
+
+
+
+  //request message
+  string request = "GET test.bin "  +
+                to_string(offset) + " " +
+                to_string(length) + "\n";
+  size_t totalSent = 0;
+
+  //keep sending request until its fully sent
+  while (totalSent < request.size()) {
+    ssize_t bytesSent = send(
+      clientSocket,
+      request.data() + totalSent,
+      request.size() - totalSent,
+      MSG_NOSIGNAL
+    );
+    if (bytesSent <= 0) {
+      perror("send failed");
+      close(clientSocket);
+      return false;
+    }
+
+    totalSent += bytesSent;
+  }
+  cout << "Requested test.bin" << endl;
+
+  string response;
+
+  if (!recvLine(clientSocket, response)) {
+    cerr << "failed to receive response" << endl;
+    close(clientSocket);
+    return false;
+  }
+  if (response != "OK " + to_string(length)) {
+    cerr << "server error: " << response << endl;
+    close(clientSocket);
+    return false;
+  }
+
+  char buffer[1024];
+  size_t totalReceived =0;
+
+  while( totalReceived <length){
+    ssize_t bytesReceived = recv(
+      clientSocket,
+      buffer + totalReceived,
+      length-totalReceived,
+      0
+    );
+
+    if(bytesReceived <=0){
+      cerr<< "chunk download failed"<<endl;
+      close(clientSocket);
+      return false;
+    }
+
+    totalReceived += bytesReceived;
+  }
+
+  string outputName = "chunk_" + to_string(chunkNumber) + ".bin";
+  ofstream outputFile(outputName, ios::binary);
+
+  if (!outputFile.is_open()) {
+    cerr << "chunk file failed to create" << endl;
+    close(clientSocket);
+    return false;
+  }
+  outputFile.write(buffer, totalReceived);
+  outputFile.close();
+
+  if (!outputFile) {
+    cerr << "failed to save chunk" << endl;
+    close(clientSocket);
+    return false;
+  }
+
+  cout << "Downloaded chunk: "
+    << chunkNumber
+    << ": " << totalReceived << " bytes" << endl;
+  close(clientSocket);
+  return true;
+
+
+}
+//worker function for downloading chunks
+void downloadWorker(int threadID, int threadCount, const string& serverIP, int port, size_t fileSize, size_t chunkSize, atomic<bool>& failed) {
+
+  size_t totalChunks = (fileSize + chunkSize -1)/chunkSize;
+
+  for(size_t chunkNumber =threadID; chunkNumber < totalChunks; chunkNumber +=threadCount){
+    size_t offset = chunkNumber * chunkSize;
+    size_t length =min(chunkSize, fileSize-offset);
+    cout << "Thread " << threadID << " downloading chunk " << chunkNumber << endl;
+    if (!downloadChunk(serverIP, port, offset, length, chunkNumber)) {
+      failed = true;
+      return;
+    }
+  }
 }
 int main() {
 
@@ -42,125 +179,26 @@ int main() {
   const size_t fileSize = 2500;
   const size_t chunkSize = 1024;
 
-  size_t chunkNumber = 0;
+  const int threadCount=3;
 
-  //loop chunk by chunk untill all chunks are transfered
-  for (size_t offset = 0; offset < fileSize; offset += chunkSize) {
-    size_t length = min(chunkSize, fileSize - offset);
-  
+  atomic<bool> failed(false);
 
-    //create socket endpoint
-    int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+  vector<thread>workers;
 
-    if (clientSocket < 0) {
-      perror("socket failed");
-      return 1;
-    }
+  //create thread for each worker
+  for(int i =0; i<threadCount;i++){
+    workers.emplace_back(downloadWorker, i, threadCount,
+    cref(serverIP), port, fileSize,chunkSize,ref(failed));
 
-    // configure address
-    sockaddr_in serverAddress{};
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(port);
+  }
 
-    if (inet_pton(AF_INET, serverIP.c_str(),
-        &serverAddress.sin_addr)!=1){
-      cout << "invalid ip" << endl;
-      close(clientSocket);
-      return 1; 
-    }
+  for(auto& worker:workers){
+    worker.join();
+  }
 
-    //connect to server
-    if(connect(clientSocket, (sockaddr*)&serverAddress,
-      sizeof(serverAddress))<0){
-      perror("connection failed");
-      close(clientSocket);
-      return 1;
-    }
-
-    cout<< "connected to peer server" << endl;
-
-  
-
-    //request message
-    string request = "GET test.bin "  +
-                 to_string(offset) + " " +
-                 to_string(length) + "\n";
-    size_t totalSent = 0;
-
-    //keep sending request until its fully sent
-    while (totalSent < request.size()) {
-      ssize_t bytesSent = send(
-        clientSocket,
-        request.data() + totalSent,
-        request.size() - totalSent,
-        MSG_NOSIGNAL
-      );
-      if (bytesSent <= 0) {
-        perror("send failed");
-        close(clientSocket);
-        return 1;
-      }
-
-      totalSent += bytesSent;
-    }
-    cout << "Requested test.bin" << endl;
-
-    string response;
-
-    if (!recvLine(clientSocket, response)) {
-      cerr << "failed to receive response" << endl;
-      close(clientSocket);
-      return 1;
-    }
-    if (response != "OK " + to_string(length)) {
-      cerr << "server error: " << response << endl;
-      close(clientSocket);
-      return 1;
-    }
-
-    char buffer[1024];
-    size_t totalReceived =0;
-
-    while( totalReceived <length){
-      ssize_t bytesReceived = recv(
-        clientSocket,
-        buffer + totalReceived,
-        length-totalReceived,
-        0
-      );
-
-      if(bytesReceived <=0){
-        cerr<< "chunk download failed"<<endl;
-        close(clientSocket);
-        return 1;
-      }
-
-      totalReceived += bytesReceived;
-    }
-
-    string outputName = "chunk_" + to_string(chunkNumber) + ".bin";
-    ofstream outputFile(outputName, ios::binary);
-
-    if (!outputFile.is_open()) {
-      cerr << "chunk file failed to create" << endl;
-      close(clientSocket);
-      return 1;
-    }
-    outputFile.write(buffer, totalReceived);
-    outputFile.close();
-
-    if (!outputFile) {
-      cerr << "failed to save chunk" << endl;
-      close(clientSocket);
-      return 1;
-    }
-
-    cout << "Downloaded chunk: "
-     << chunkNumber
-     << ": " << totalReceived << " bytes" << endl;
-    close(clientSocket);
-    chunkNumber++;
-
+  if(failed){
+    cerr<< "one or more chunks failed"<<endl;
+    return 1;
   }
 
   cout << "all chunks downloaded" << endl;

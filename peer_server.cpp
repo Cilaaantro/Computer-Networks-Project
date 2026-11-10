@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <sstream>
+#include <thread>
 
 using namespace std;
 // custom send function that keeps sending until all bytes are sent
@@ -185,9 +186,16 @@ int main() {
 
     cout << "client connected" << endl;
 
-    handleClientRequest(clientSocket, sharedFolder);
+    //makes server multi threaded
+    thread([clientSocket, sharedFolder]() {
 
-    close(clientSocket);
+      handleClientRequest(clientSocket, sharedFolder);
+
+      close(clientSocket);
+
+    }).detach();
+
+
   }
   return 0;
 
