@@ -92,7 +92,7 @@ bool downloadChunk(const string& serverIP, int port, size_t offset, size_t lengt
 
 
   //request message
-  string request = "GET test.bin "  +
+  string request = "GET test.txt "  +
                 to_string(offset) + " " +
                 to_string(length) + "\n";
   size_t totalSent = 0;
@@ -113,7 +113,7 @@ bool downloadChunk(const string& serverIP, int port, size_t offset, size_t lengt
 
     totalSent += bytesSent;
   }
-  cout << "Requested test.bin" << endl;
+  cout << "Requested test.txt" << endl;
 
   string response;
 
@@ -193,12 +193,12 @@ int main() {
     return 1;
   }
 
-  const size_t fileSize = 2500;
+  const size_t fileSize = 1850751;
   const size_t chunkSize = 1024;
 
   const int threadCount=3;
 
-  int outputFD = open("downloaded_test.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  int outputFD = open("downloaded_test.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
   if (outputFD < 0) {
     perror("failed to create output file");
