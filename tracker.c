@@ -15,6 +15,9 @@
 //for managing concurrency
 pthread_mutex_t trackerMutex = PTHREAD_MUTEX_INITIALIZER;
 
+//global variable for storing the tracker directory
+char trackerDir[256];
+
 //helper to send message to peer
 int sendAll(int sock, const char *message){
     size_t total = 0;
@@ -53,7 +56,7 @@ void handleList(int clientSock){
 
     pthread_mutex_lock(&trackerMutex);
 
-    directory = opendir("torrents");
+    directory = opendir(trackerDir);
 
     if(directory==NULL){
         perror("opendir");
@@ -72,12 +75,12 @@ void handleList(int clientSock){
         if(count >= 100)
             break;
 
-        char path[512];
+        char path[1024];
 
-        snprintf(path, sizeof(path), "torrents/%s", name);
+        snprintf(path, sizeof(path), "%s%s", trackerDir, name);
 
         FILE *file = fopen(path, "r");
-
+        //check if file opened successfuly
         if (file == NULL)
             continue;
 
@@ -98,11 +101,13 @@ void handleList(int clientSock){
             md5
         );
 
+        //close the file after reading info
         fclose(file);
 
         if(parsed !=4)
             continue;
 
+        //copy info into variables
         strcpy(filenames[count], filename);
         strcpy(filesizes[count], filesize);
         strcpy(md5s[count], md5);
@@ -118,6 +123,7 @@ void handleList(int clientSock){
 
     snprintf(response, sizeof(response), "<REP LIST %d>\n", count);
 
+    //send response to peer
     if(sendAll(clientSock, response) < 0)
         return;
 
@@ -155,9 +161,9 @@ void handleCreateTracker(int clientSock, const char *message){
         send(clientSock, RESP_CREATE_TRACKER_FAILURE, strlen(RESP_CREATE_TRACKER_FAILURE), 0);
     }
 
-    char path[512];
+    char path[1024];
 
-    snprintf(path, sizeof(path), "torrents/%s.track", filename);
+    snprintf(path, sizeof(path), "%s%s.track", trackerDir , filename);
 
     pthread_mutex_lock(&trackerMutex);
 
@@ -228,7 +234,7 @@ void handleCreateTracker(int clientSock, const char *message){
 void handleGet(int clientSock, const char * message){
 
     char filename[256];
-    char path[512];
+    char path[1024];
 
     //get the filename and make sure it's valid
     if (sscanf(message, "<GET %255[^>]>", filename) != 1){
@@ -249,7 +255,7 @@ void handleGet(int clientSock, const char * message){
         return;
     }
 
-    snprintf(path, sizeof(path), "torrents/%s", filename);
+    snprintf(path, sizeof(path), "%s%s", trackerDir, filename);
 
     pthread_mutex_lock(&trackerMutex);
 
@@ -279,9 +285,10 @@ void handleGet(int clientSock, const char * message){
         return;
     }
 
+    //go to beginning of the file
     rewind(file);
 
-    //go to the beginning of the file
+    //send file contents to peer
     if(sendAll(clientSock, RESP_GET_TRACKER_BEGIN) < 0){
         fclose(file);
         pthread_mutex_unlock(&trackerMutex);
@@ -324,8 +331,8 @@ void handleUpdateTracker(int clientSock, const char *message){
         return;
     }
 
-    char path[512];
-    snprintf(path, sizeof(path), "torrents/%s.track", filename);
+    char path[1024];
+    snprintf(path, sizeof(path), "%s%s.track", trackerDir, filename);
 
     pthread_mutex_lock(&trackerMutex);
 
@@ -499,6 +506,46 @@ void *handleClient(void  *arg){
     return NULL;
 }
 
+//function to read the sconfig file
+int handleConfig(int *port, char *directory, size_t dirSize){
+    FILE *file = fopen("sconfig", "r");
+
+    if(file == NULL){
+        perror("Cannot open sconfig");
+        return -1;
+    }
+
+    char line[128];
+    char extra;
+
+    //read and check if the port is valid
+    if(fgets(line, sizeof(line), file) == NULL || sscanf(line, " %d %c", port, &extra) != 1 || *port < 1 || *port > 65535){
+        fprintf(stderr, "Invalid port in sconfig\n");
+        fclose(file);
+        return -1;
+    }
+
+    //read the directory and check if it exists
+    if(fgets(line, sizeof(line), file) == NULL){
+        fprintf(stderr, "Missing directory in sconfig\n");
+        fclose(file);
+        return -1;
+    }
+
+    line[strcspn(line, "\r\n")] = '\0';
+
+    //check if the directory is valid
+    if(line[0] == '\0' || strlen(line) >= dirSize){
+        fprintf(stderr, "Invalid directory in sconfig\n");
+        fclose(file);
+        return -1;
+    }
+
+    strcpy(directory, line);
+
+    fclose(file);
+    return 0;
+}
 
 int main(void){
     //initialize variables for server and client sockets
@@ -527,9 +574,16 @@ int main(void){
         return 1;
     }
 
-    //port for testing
-    //will be read from sconfig file in future
-    int port = 9000;
+    //port read from sconfig
+    int port;
+
+    if(handleConfig(&port, trackerDir, sizeof(trackerDir)) != 0){
+        return 1;
+    }
+
+    printf("Configuration complete:\n");
+    printf("Port: %d\n", port);
+    printf("Directory: %s\n", trackerDir);
 
     //initialize server address
     memset(&servAddr, 0, sizeof(servAddr));
