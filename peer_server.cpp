@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <sstream>
 
 using namespace std;
 // custom send function that keeps sending until all bytes are sent
@@ -24,6 +25,111 @@ bool sendBytes(int socketFD, const char* data, size_t length){
     totalSent +=bytesSent;
   }
   return true;
+}
+
+//receive request
+bool recvLine(int socketFD, string& line){
+  char ch;
+  while(line.size() <256){
+    ssize_t bytesReceived = recv(socketFD, &ch,1,0);
+
+    if(bytesReceived<=0){
+      return false;
+    }
+
+    if(ch == '\n'){
+      return true;
+    }
+    line +=ch;
+  }
+  return false;
+}
+void handleClientRequest(int clientSocket, const string& sharedFolder){
+  string request;
+  if(!recvLine(clientSocket, request)){
+    cerr<<"failed to receive request" <<endl;
+    return;
+  }
+  cout << "receieved request: "<<request<<endl;
+  
+  istringstream parser(request);
+
+  string command;
+  string filename;
+  long long offset;
+  long long length;
+  if (!(parser >> command >> filename >> offset >> length)) {
+    cerr << "invalid request format" << endl;
+    return;
+  }
+
+  string extra;
+  //validate rerquest
+  if (command != "GET" ||
+    (parser >> extra) ||
+    filename.empty() ||
+    filename.find('/') != string::npos ||
+    filename.find('\\') != string::npos ||
+    filename.find("..") != string::npos ||
+    offset < 0 ||
+    length <= 0 ||
+    length > 1024) {
+
+    string error = "<GET invalid>\n";
+
+    sendBytes(clientSocket, error.c_str(), error.size());
+
+    return;
+  }
+  ifstream file(sharedFolder + "/" + filename, ios::binary);
+  if (!file.is_open()) {
+    cerr << "Cant open fiile" << endl;
+    string error = "<GET invalid>\n";
+    sendBytes(clientSocket, error.c_str(), error.size());
+    return;
+  }
+
+  //go to end of file to determine file size
+  file.seekg(0, ios::end);
+  streamoff fileSize = file.tellg();
+
+  //make sure bytes exist
+  if (fileSize < 0 ||
+    offset > fileSize ||
+    length > fileSize - offset) {
+
+    string error = "<GET invalid>\n";
+    sendBytes(clientSocket, error.c_str(), error.size());
+    return;
+  } 
+
+  file.seekg(offset, ios::beg);
+
+  char buffer[1024];
+
+  file.read(buffer, length);
+
+  if (file.gcount() != length) {
+    cerr << "chunk read fail" << endl;
+    return;
+  }
+  
+  //send requested chunk
+  string header = "OK " + to_string(length)+ "\n";
+
+  if(!sendBytes(clientSocket, header.c_str(), header.size())){
+    cerr << "Failed to send header response"<<endl;
+    return;
+  }
+
+  if(!sendBytes(clientSocket, buffer, length)){
+    cerr << "failed to send chunk"<<endl;
+    return;
+  }
+  cout<< "sent" << length << " bytes starting at " << offset <<endl;
+
+
+
 }
 int main() {
   ifstream config("serverThreadConfig.cfg");
@@ -54,7 +160,7 @@ int main() {
 
   //bind server's adress
   if(bind(serverSocket, (sockaddr*)&serverAddress,
-    sizeof(serverAddress)) ==1){
+    sizeof(serverAddress)) ==-1){
       perror("bind error");
       close(serverSocket);
       return 1;
@@ -69,75 +175,20 @@ int main() {
 
   cout << "server listening on port "<< port << endl;
 
-  // accept incoming request
-  int clientSocket = accept(serverSocket, nullptr, nullptr);
 
-  if (clientSocket == -1) {
-      perror("failed to accept client request");
-      close(serverSocket);
-      return 1;
-  }
-
-  cout << "client connected" << endl;
-
-  string request;
-  char ch;
-
-  //get request name
-  while(request.size() <100){
-    ssize_t bytesReceived = recv(clientSocket, &ch, 1, 0);
-
-    if(bytesReceived <=0){
-      break;
+  while (true){
+    int clientSocket = accept(serverSocket, nullptr ,nullptr);
+    if (clientSocket < 0) {
+    perror("request accept failed");
+    continue;
     }
-    if( ch == '\n'){
-      break;
-    }
-    request += ch;
-  }
-  cout << "Request received: " << request << endl;
 
-  if( request != "GET test.txt"){
-    cerr << "invalid file test" <<endl;
+    cout << "client connected" << endl;
+
+    handleClientRequest(clientSocket, sharedFolder);
+
     close(clientSocket);
-    close(serverSocket);
-    return 1;
-
   }
-
-  //open file
-  ifstream file(sharedFolder + "/test.txt", ios::binary);
-
-  if (!file.is_open()) {
-    cerr << "Cant open file" << endl;
-    close(clientSocket);
-    close(serverSocket);
-    return 1;
-  }
-
-  char buffer[1024];
-  //send file
-  while(file){
-    //reads 1024 bytes at a time
-    file.read(buffer, sizeof(buffer));
-
-    //get actual bytes red
-    streamsize bytesRead = file.gcount();
-
-    if(bytesRead > 0){
-      if(!sendBytes(clientSocket, buffer, bytesRead)){
-        cerr<<"error sending file"<<endl;
-        close(clientSocket);
-        close(serverSocket);
-        return 1;
-      }
-    }
-  }
-
-  close(clientSocket);
-  close(serverSocket);
-
-  
-
   return 0;
+
 }

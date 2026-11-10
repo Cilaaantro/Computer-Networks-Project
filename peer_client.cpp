@@ -8,7 +8,22 @@
 
 using namespace std;
 
+bool recvLine(int socketFD, string& line){
+  char ch;
+  while(line.size() <256){
+    ssize_t bytesReceived = recv(socketFD, &ch,1,0);
 
+    if(bytesReceived<=0){
+      return false;
+    }
+
+    if(ch == '\n'){
+      return true;
+    }
+    line +=ch;
+  }
+  return false;
+}
 int main() {
 
   ifstream config("peerDownloadConfig.cfg");
@@ -53,11 +68,10 @@ int main() {
 
   cout<< "connected to peer server" << endl;
 
-  //close connection
  
 
   //request message
-  string request = "GET test.txt\n";
+  string request = "GET test.bin 0 1024\n";
   size_t totalSent = 0;
 
   //keep sending request until its fully sent
@@ -76,54 +90,62 @@ int main() {
 
     totalSent += bytesSent;
   }
-  cout << "Requested test.txt" << endl;
+  cout << "Requested test.bin" << endl;
 
-  //create file for download
-  ofstream outputFile("downloaded_test.txt", ios::binary);
+  string response;
 
-  if (!outputFile.is_open()) {
-    cerr << "Cannot create output file" << endl;
+  if (!recvLine(clientSocket, response)) {
+    cerr << "failed to receive response" << endl;
+    close(clientSocket);
+    return 1;
+  }
+  if (response != "OK 1024") {
+    cerr << "server error: " << response << endl;
     close(clientSocket);
     return 1;
   }
 
   char buffer[1024];
-  ssize_t bytesReceived;
-  size_t totalReceieved;
+  size_t totalReceived =0;
 
-  // receive the file
-  while ((bytesReceived = recv (
-    clientSocket,
-    buffer,
-    sizeof(buffer),
-  0))>0){
-    //write received data to file
-    outputFile.write(buffer, bytesReceived);
-    if (!outputFile) {
-      cerr << "Error writing file" << endl;
+  while( totalReceived <1024){
+    ssize_t bytesReceived = recv(
+      clientSocket,
+      buffer + totalReceived,
+      1024-totalReceived,
+      0
+    );
+
+    if(bytesReceived <=0){
+      cerr<< "chunk download failed"<<endl;
       close(clientSocket);
       return 1;
     }
-    totalReceieved += bytesReceived;
-    cout<< ""<< totalReceieved << "bytes received" <<endl;
 
+    totalReceived += bytesReceived;
   }
-  if (bytesReceived < 0) {
-    perror("recv failed");
+
+  ofstream outputFile("chunk_0.bin", ios::binary);
+
+  if (!outputFile.is_open()) {
+    cerr << "chunk file failed to create" << endl;
     close(clientSocket);
     return 1;
   }
-
+  outputFile.write(buffer, totalReceived);
   outputFile.close();
 
   if (!outputFile) {
-    cerr << "Error closing output file" << endl;
+    cerr << "failed to save chunk" << endl;
     close(clientSocket);
     return 1;
   }
 
-  cout << "Download finished!" << endl;
+  cout << "Downloaded chunk: "
+    << totalReceived << " bytes" << endl;
   close(clientSocket);
+
+
 
   return 0;
 }
