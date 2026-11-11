@@ -77,7 +77,7 @@ void handleList(int clientSock){
 
         char path[1024];
 
-        snprintf(path, sizeof(path), "%s%s", trackerDir, name);
+        snprintf(path, sizeof(path), "%s/%s", trackerDir, name);
 
         FILE *file = fopen(path, "r");
         //check if file opened successfuly
@@ -163,8 +163,8 @@ void handleCreateTracker(int clientSock, const char *message){
 
     char path[1024];
 
-    snprintf(path, sizeof(path), "%s%s.track", trackerDir , filename);
-
+    snprintf(path, sizeof(path), "%s/%s.track", trackerDir , filename);
+    
     pthread_mutex_lock(&trackerMutex);
 
     int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
@@ -255,7 +255,7 @@ void handleGet(int clientSock, const char * message){
         return;
     }
 
-    snprintf(path, sizeof(path), "%s%s", trackerDir, filename);
+    snprintf(path, sizeof(path), "%s/%s", trackerDir, filename);
 
     pthread_mutex_lock(&trackerMutex);
 
@@ -332,7 +332,7 @@ void handleUpdateTracker(int clientSock, const char *message){
     }
 
     char path[1024];
-    snprintf(path, sizeof(path), "%s%s.track", trackerDir, filename);
+    snprintf(path, sizeof(path), "%s/%s.track", trackerDir, filename);
 
     pthread_mutex_lock(&trackerMutex);
 
